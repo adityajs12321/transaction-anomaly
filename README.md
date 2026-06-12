@@ -6,16 +6,7 @@ generate a narrative summary, and exposes results via a polling API.
 
 ## Architecture
 
-```
-            ┌──────────┐   enqueue    ┌─────────┐   dequeue   ┌────────────────┐
- client ──▶ │ FastAPI  │ ───────────▶ │  Redis  │ ──────────▶ │ Celery worker  │
-   ▲        │  (api)   │              └─────────┘             │  clean → flag  │
-   │        └────┬─────┘                                      │  → LLM batch   │
-   │  poll       │                                            │  → LLM summary │
-   └─────────────┤            ┌────────────┐                  └───────┬────────┘
-                 └──────────▶ │ PostgreSQL │ ◀────────────────────────┘
-                              └────────────┘
-```
+![image](https://github.com/adityajs12321/transaction-anomaly/blob/main/pipeline.png)
 
 - **API** (FastAPI): validates the upload, persists a `Job` (status=`pending`),
   enqueues `process_job`, returns `job_id` immediately.
@@ -42,7 +33,6 @@ http://localhost:8000/docs.
 
 > Without `GEMINI_API_KEY`, everything still runs end to end; LLM-dependent
 > fields are marked `llm_failed: true` per the assignment's retry/continue rule.
-> To use a local model instead: `LLM_PROVIDER=ollama` (Ollama on the host).
 
 ## Endpoints & example curl requests
 
@@ -93,7 +83,7 @@ curl -s "http://localhost:8000/jobs?status=completed&limit=20&offset=0"
 |---|---|
 | a) Cleaning | Dates (`DD-MM-YYYY`, `YYYY/MM/DD`) → ISO 8601; `$`/`,` stripped from amounts; currency & status uppercased; blank categories → `Uncategorised`; exact duplicate rows removed |
 | b) Anomaly detection | Amount > 3× the account's median; `USD` currency on domestic-only brands (Swiggy, Ola, IRCTC, …) |
-| c) LLM classification | Uncategorised rows split into chunks of `LLM_BATCH_SIZE` (default 40) — one LLM call per chunk, so large files never exceed a single prompt. Categories: Food, Shopping, Travel, Transport, Utilities, Cash Withdrawal, Entertainment, Other |
+| c) LLM classification | Uncategorised rows split into chunks of `LLM_BATCH_SIZE` (default 40) — one LLM call per chunk, so large files never exceed a single prompt. The generated category replaces the blank `category` field; `llm_category` records which rows the LLM filled. Categories: Food, Shopping, Travel, Transport, Utilities, Cash Withdrawal, Entertainment, Other |
 | d) LLM narrative | One call producing `narrative` + `risk_level`; totals/top-merchants computed in code for accuracy |
 | e) Retry logic | Each LLM call retried up to 3× with exponential backoff (1s, 2s, 4s); permanent failures set `llm_failed` and processing continues |
 
@@ -129,13 +119,11 @@ depends on Langfuse being reachable.
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_PROVIDER` | `gemini` | `gemini` or `ollama` |
-| `GEMINI_API_KEY` | _empty_ | Free-tier key; LLM steps degrade gracefully if unset |
+| `GEMINI_API_KEY` | _empty_ | Free-tier key |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Gemini model id |
-| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Local Ollama |
-| `OLLAMA_MODEL` | `llama3.2` | Local model name |
 | `LLM_BATCH_SIZE` | `40` | Transactions per LLM classification call (chunking) |
-| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | _empty_ | Enable Langfuse LLM tracing |
-| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse instance (cloud or self-hosted) |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | _empty_ | Enable Langfuse LLM tracing (disabled if no keys) |
+| `LANGFUSE_HOST` | `https://localhost:3000` | Langfuse instance (cloud or self-hosted) |
 
 ## Development
 

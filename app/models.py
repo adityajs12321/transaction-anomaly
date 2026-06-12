@@ -69,12 +69,6 @@ class Transaction(Base):
 
     job: Mapped[Job] = relationship(back_populates="transactions")
 
-    @property
-    def final_category(self) -> str:
-        if self.category and self.category != "Uncategorised":
-            return self.category
-        return self.llm_category or self.category or "Uncategorised"
-
 
 class JobSummary(Base):
     __tablename__ = "job_summaries"

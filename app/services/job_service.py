@@ -1,7 +1,5 @@
 """Business logic for job creation and retrieval (API side)."""
 
-from collections import defaultdict
-
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -13,7 +11,7 @@ from app.exceptions import (
     ResultsNotReadyError,
     UploadTooLargeError,
 )
-from app.models import Job, JobStatus, Transaction
+from app.models import Job, JobStatus
 from app.pipeline.cleaning import read_csv
 
 
@@ -71,8 +69,8 @@ class JobService:
     def get_results(self, job_id: str, limit: int = 100, offset: int = 0) -> dict:
         """Full structured output for a completed job.
 
-        The transactions list is paginated; anomalies and the category
-        breakdown are computed over the full set (they need every row).
+        Pagination, counting, anomaly filtering, and the category breakdown
+        all happen in SQL — API memory no longer grows with job size.
         """
         job = self.get_job(job_id)
         if job.status == JobStatus.FAILED:
@@ -80,29 +78,11 @@ class JobService:
         if job.status != JobStatus.COMPLETED:
             raise ResultsNotReadyError(f"Job is still {job.status}; poll /jobs/{job.id}/status")
 
-        transactions = self.transactions.list_for_job(job.id)
         return {
             "job": job,
-            "transactions": transactions[offset : offset + limit],
-            "transactions_total": len(transactions),
-            "anomalies": [t for t in transactions if t.is_anomaly],
-            "category_breakdown": self._category_breakdown(transactions),
+            "transactions": self.transactions.list_for_job(job.id, limit=limit, offset=offset),
+            "transactions_total": self.transactions.count_for_job(job.id),
+            "anomalies": self.transactions.list_anomalies(job.id),
+            "category_breakdown": self.transactions.category_breakdown(job.id),
             "summary": job.summary,
-        }
-
-    @staticmethod
-    def _category_breakdown(transactions: list[Transaction]) -> dict:
-        breakdown: dict[str, dict] = defaultdict(
-            lambda: {"count": 0, "total_by_currency": defaultdict(float)}
-        )
-        for t in transactions:
-            entry = breakdown[t.final_category]
-            entry["count"] += 1
-            if t.amount is not None and t.currency:
-                entry["total_by_currency"][t.currency] = round(
-                    entry["total_by_currency"][t.currency] + t.amount, 2
-                )
-        return {
-            category: {"count": v["count"], "total_by_currency": dict(v["total_by_currency"])}
-            for category, v in breakdown.items()
         }

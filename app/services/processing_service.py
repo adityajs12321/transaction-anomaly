@@ -32,11 +32,15 @@ class ProcessingService:
                     return
                 job.status = JobStatus.PROCESSING
                 self._set_progress(job, step="cleaning")
-
+                
+                # Cleaning and anomaly detection
                 transactions = self._clean_and_persist(job)
+
+                # LLM Classification
                 self._classify_uncategorised(job, transactions)
 
                 self._set_progress(job, step="summarizing")
+                # Narrative summary
                 self._build_summary(job, transactions)
 
                 job.status = JobStatus.COMPLETED
@@ -70,7 +74,7 @@ class ProcessingService:
         self.jobs.save()
 
     def _clean_and_persist(self, job: Job) -> list[Transaction]:
-        """Steps (a)+(b): clean rows, detect anomalies, persist transactions."""
+        """Steps (a)-(b): clean rows, detect anomalies, persist transactions."""
         raw_rows = cleaning.read_csv(job.raw_csv)
         cleaned = cleaning.clean_rows(raw_rows)
         job.row_count_raw = len(raw_rows)
@@ -83,8 +87,7 @@ class ProcessingService:
         """Step (c): LLM classification for rows without a category.
 
         Pending rows are split into chunks of llm_batch_size — one LLM call per
-        chunk — so arbitrarily large files never exceed a single prompt.
-        Progress is persisted after every chunk.
+        chunk
         """
         pending = [t for t in transactions if t.category == "Uncategorised"]
         self._set_progress(job, step="classifying", classified=0, total=len(pending))
@@ -104,9 +107,13 @@ class ProcessingService:
                 assignments = {}
             for t in batch:
                 if not t.llm_failed:
-                    t.llm_category = assignments.get(str(t.id))
-                    if t.llm_category is None:
+                    category = assignments.get(str(t.id))
+                    if category is None:
                         t.llm_failed = True
+                    else:
+                        # Replace the blank category; llm_category records provenance
+                        t.category = category
+                        t.llm_category = category
             self.transactions.save()
             self._set_progress(
                 job, step="classifying", classified=start + len(batch), total=len(pending)
@@ -133,7 +140,6 @@ class ProcessingService:
 
     @staticmethod
     def _compute_stats(transactions: list[Transaction]) -> dict:
-        """Aggregate stats used for the summary record and the LLM narrative prompt."""
         spend_by_currency: dict[str, float] = defaultdict(float)
         spend_by_merchant: dict[str, float] = defaultdict(float)
         for t in transactions:
@@ -161,7 +167,7 @@ class ProcessingService:
                 for t in anomalies[:10]
             ],
             "category_counts": {
-                cat: sum(1 for t in transactions if t.final_category == cat)
-                for cat in {t.final_category for t in transactions}
+                cat: sum(1 for t in transactions if t.category == cat)
+                for cat in {t.category for t in transactions}
             },
         }
